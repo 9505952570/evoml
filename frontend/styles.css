@@ -1,42 +1,291 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>EvoML Dashboard</title>
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <div class="container">
-      <header class="hero">
-        <div>
-          <p class="eyebrow">Self-adaptive ML</p>
-          <h1>EvoML pipeline explorer</h1>
-        </div>
-        <button id="load-demo" class="primary-button">Load demo data</button>
-      </header>
+const demoData = [
+  {
+    age: 25,
+    income: 42000,
+    tenure: 12,
+    account_balance: 1500,
+    churn: 0,
+    segment: "young_professional"
+  },
+  {
+    age: 46,
+    income: 90000,
+    tenure: 48,
+    account_balance: 4000,
+    churn: 1,
+    segment: "premium"
+  },
+  {
+    age: 34,
+    income: 60000,
+    tenure: 17,
+    account_balance: 2100,
+    churn: 0,
+    segment: "growth"
+  },
+  {
+    age: 52,
+    income: 87000,
+    tenure: 60,
+    account_balance: 9000,
+    churn: 1,
+    segment: "premium"
+  },
+  {
+    age: 29,
+    income: 54000,
+    tenure: 9,
+    account_balance: 1200,
+    churn: 0,
+    segment: "starter"
+  },
+  {
+    age: 39,
+    income: 71000,
+    tenure: 24,
+    account_balance: 3200,
+    churn: 1,
+    segment: "growth"
+  },
+  {
+    age: 41,
+    income: 76000,
+    tenure: 30,
+    account_balance: 6600,
+    churn: 0,
+    segment: "premium"
+  },
+  {
+    age: 31,
+    income: 46500,
+    tenure: 10,
+    account_balance: 1800,
+    churn: 0,
+    segment: "young_professional"
+  }
+];
 
-      <main class="grid">
-        <section class="panel">
-          <h2>Dataset</h2>
-          <label for="target-column">Target column</label>
-          <input id="target-column" type="text" value="churn" />
-          <textarea id="dataset-json" rows="18"></textarea>
-          <div class="actions">
-            <button id="profile-btn" class="primary-button">Profile data</button>
-            <button id="recommend-btn" class="secondary-button">Recommend pipeline</button>
-            <button id="evaluate-btn" class="secondary-button">Evaluate models</button>
-          </div>
-        </section>
+const statusEl = document.getElementById("status");
+const resultsEl = document.getElementById("results");
+const datasetEl = document.getElementById("dataset-json");
+const targetEl = document.getElementById("target-column");
+const csvFileInput = document.getElementById("csv-file");
 
-        <section class="panel results-panel">
-          <h2>System output</h2>
-          <div id="status" class="status">Ready</div>
-          <div id="results" class="results"></div>
-        </section>
-      </main>
-    </div>
+function setStatus(message, tone = "neutral") {
+  statusEl.textContent = message;
+  statusEl.className = "status";
+  if (tone === "success") statusEl.classList.add("success");
+  if (tone === "error") statusEl.classList.add("error");
+}
 
-    <script src="app.js"></script>
-  </body>
-</html>
+function parseCSV(text) {
+  const rows = text.trim().split(/\r?\n/);
+  if (rows.length < 2) return [];
+
+  const headers = rows[0].split(",").map((cell) => cell.trim());
+  const data = [];
+
+  for (let i = 1; i < rows.length; i += 1) {
+    const cells = rows[i].split(",").map((cell) => cell.trim());
+    if (cells.length !== headers.length || cells.every((cell) => cell === "")) continue;
+
+    const row = {};
+    headers.forEach((header, index) => {
+      const value = cells[index];
+      row[header] = value === "" ? null : value;
+    });
+    data.push(row);
+  }
+
+  return data;
+}
+
+function normalizeDataValues(rows) {
+  return rows.map((row) => {
+    const normalized = {};
+    Object.entries(row).forEach(([key, value]) => {
+      if (value === null || value === "") {
+        normalized[key] = null;
+        return;
+      }
+
+      if (!Number.isNaN(Number(value)) && value.trim() !== "") {
+        const numericValue = Number(value);
+        normalized[key] = Number.isInteger(numericValue) ? numericValue : parseFloat(numericValue);
+        return;
+      }
+
+      normalized[key] = value;
+    });
+    return normalized;
+  });
+}
+
+function renderResults(title, content) {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `<h3>${title}</h3>${content}`;
+  resultsEl.appendChild(card);
+}
+
+function clearResults() {
+  resultsEl.innerHTML = "";
+}
+
+async function apiRequest(path, payload = null, method = "POST") {
+  const options = {
+    method,
+    headers: { "Content-Type": "application/json" },
+  };
+
+  if (payload && method !== "GET") {
+    options.body = JSON.stringify(payload);
+  }
+
+  const response = await fetch(`http://localhost:8000${path}`, options);
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.detail || "Request failed");
+  }
+
+  return data;
+}
+
+function loadDemoData() {
+  datasetEl.value = JSON.stringify(demoData, null, 2);
+  targetEl.value = "churn";
+  setStatus("Demo dataset loaded", "success");
+}
+
+async function profileDataset() {
+  clearResults();
+  try {
+    const data = JSON.parse(datasetEl.value);
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error("Dataset must be a JSON array of objects.");
+    }
+
+    const payload = { data, target_column: targetEl.value || "target" };
+    const profile = await apiRequest("/api/datasets/profile", payload);
+
+    const content = `
+      <div class="badge">${profile.problem_type}</div>
+      <ul>
+        <li>Rows: ${profile.rows}</li>
+        <li>Columns: ${profile.columns}</li>
+        <li>Missing ratio: ${(profile.missing_ratio * 100).toFixed(2)}%</li>
+        <li>Drift risk: ${(profile.drift_risk * 100).toFixed(2)}%</li>
+      </ul>
+      <pre>${JSON.stringify(profile, null, 2)}</pre>
+    `;
+
+    renderResults("Dataset Profile", content);
+    setStatus("Profile completed successfully", "success");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
+async function recommendPipeline() {
+  clearResults();
+  try {
+    const data = JSON.parse(datasetEl.value);
+    const payload = { data, target_column: targetEl.value || "target" };
+    const recommendation = await apiRequest("/api/pipeline/recommend", payload);
+
+    const content = `
+      <p><strong>Preprocessing:</strong> ${recommendation.preprocessing_steps.join(", ") || "none"}</p>
+      <p><strong>Candidate models:</strong> ${recommendation.candidate_models.join(", ")}</p>
+      <p><strong>Adaptation plan:</strong></p>
+      <ul>${recommendation.adaptation_plan.map((step) => `<li>${step}</li>`).join("")}</ul>
+      <p>${recommendation.rationale}</p>
+      <p><strong>Drift strategy:</strong> ${recommendation.drift_strategy}</p>
+    `;
+
+    renderResults("Pipeline Recommendation", content);
+    setStatus("Pipeline recommendation generated", "success");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
+async function evaluateModels() {
+  clearResults();
+  try {
+    const data = JSON.parse(datasetEl.value);
+    const payload = {
+      data,
+      target_column: targetEl.value || "target",
+      candidate_models: ["logistic_regression", "random_forest", "gradient_boosting", "svm"],
+    };
+    const scores = await apiRequest("/api/models/evaluate", payload);
+
+    const content = `
+      <ul>${scores
+        .map(
+          (item) => `<li><strong>${item.model}</strong>: ${item.score.toFixed(4)} (${item.metric})</li>`
+        )
+        .join("")}</ul>
+    `;
+
+    renderResults("Model Evaluation", content);
+    setStatus("Model evaluation complete", "success");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
+async function checkDrift() {
+  clearResults();
+  try {
+    const data = JSON.parse(datasetEl.value);
+    const payload = { data, target_column: targetEl.value || "target" };
+    const drift = await apiRequest("/api/drift/summary", payload);
+    const content = `
+      <p><strong>Drift risk:</strong> ${(drift.drift_risk * 100).toFixed(2)}%</p>
+      <p><strong>Missingness:</strong> ${(drift.missingness * 100).toFixed(2)}%</p>
+      <p><strong>Label imbalance:</strong> ${drift.label_imbalance === null ? "N/A" : drift.label_imbalance.toFixed(4)}</p>
+      <p>${drift.recommendation}</p>
+    `;
+
+    renderResults("Drift Monitoring", content);
+    setStatus("Drift analysis complete", "success");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
+csvFileInput.addEventListener("change", (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const csvText = String(reader.result);
+      const parsed = parseCSV(csvText);
+      const normalized = normalizeDataValues(parsed);
+      if (!normalized.length) {
+        setStatus("CSV file does not contain valid rows.", "error");
+        return;
+      }
+
+      datasetEl.value = JSON.stringify(normalized, null, 2);
+      targetEl.value = Object.keys(normalized[0])[0];
+      setStatus("CSV imported successfully", "success");
+    } catch (error) {
+      setStatus("Could not parse CSV file.", "error");
+    }
+  };
+
+  reader.readAsText(file);
+});
+
+document.getElementById("load-demo").addEventListener("click", loadDemoData);
+document.getElementById("profile-btn").addEventListener("click", profileDataset);
+document.getElementById("recommend-btn").addEventListener("click", recommendPipeline);
+document.getElementById("evaluate-btn").addEventListener("click", evaluateModels);
+document.getElementById("drift-btn").addEventListener("click", checkDrift);
+
+loadDemoData();
